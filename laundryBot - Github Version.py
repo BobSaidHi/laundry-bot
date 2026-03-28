@@ -1,49 +1,53 @@
-#This is a bot that will create a dataset of laundry machine openings
-#imports
+# This is a bot that will create a dataset of laundry machine openings#imports
+# ___
 
-#scheduling libraries
-import schedule
+# Imports
+
+import sqlite3  # SQLite database
 import time
-#google sheets libraries
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-#scraping library
-import requests
-#library used for getting time
-from datetime import datetime #why
+from datetime import datetime  # library used for getting time #why - ___
 
+import requests  # scraping library
+import schedule  # scheduling libraries
 
-
-
+# Config
 #If you are using this for some reason, update these two variables with the url to the washing machine tracker and your # of machines
-#You also need to update the name of your credentials file for your service account and to set sheetName to the name of your spreadsheet
 #Also you can change the frequency that the bot checks the washers and dryers -- in minutes between checks
-url = "url of washing machine tracker"
-numberOfMachines = 8
-laundryKeyFile = 'Name of Json Key File'
-sheetName = "Laundry Data"
-checkFrequency = 15
+washAlertURL = "https://washalert.washlaundry.com/washalertweb/calpoly/WASHALERtweb.aspx?location=36524c01-9ec3-42ca-9f20-4b9b1fd0445a"
+numberOFWashers = 3
+numberOfDryers = 4
+numberOfMachines = numberOFWashers + numberOfDryers
+checkFrequency = 15 #Minutes
 
-#use this https://www.youtube.com/watch?v=cnPlKLEGR7E& if you are stupid like me and documentation hurts your head
+# Create & open database
+sqliteConnection = sqlite3.connect('data.db')
+cursor = sqliteConnection.cursor()
 
+# execute the statement
+# TODO: Run if table missing
+def createTables():
+    # SQL command to create a table in the database
+    sql_command = """CREATE TABLE data (
+    timestamp TIMESTAMP PRIMARY KEY,
+    dayOfWeek TINYTEXT,
+    hours TINYINT(24),
+    minutes TINYINT(60),
+    freeWashers TINYINT(%d),
+    freeDryers TINYINT(%d),
+    freeMachines TINYINT(%d)
+    );""" % (numberOFWashers, numberOfDryers, numberOfMachines)
 
+    cursor.execute(sql_command)
 
-
-
-
-#stolen code from stack overflow - sets up spreadsheet
-scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_name(laundryKeyFile, scope)
-client = gspread.authorize(creds)
-sheet = client.open(sheetName)
-sh = sheet.get_worksheet(0)
+# Detect if table is present
+    createTables()
 
 #sets up days of the week for later use
-weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+#weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 typeList = []
 startIndx = 0
 #sets up dryer and washer statuses -- true is washer and false is dryer
-content = requests.get(url).text
+content = requests.get(washAlertURL, verify=False).text
 for i in range(numberOfMachines) :
     num = int(content.find("class=\"type\"", startIndx, len(content)))
     if content[num + 13] == "W" : #jank
@@ -51,17 +55,11 @@ for i in range(numberOfMachines) :
     else :
         typeList.append(False)
 
-
-
-
-
-
-
 #freeMachines is the amount of machines that are open at that time
 #content is the entire html page
 #the num and startIndx variables are probably stupid but they work
 def laundryScraper() :
-    content = requests.get(url).text
+    content = requests.get(washAlertURL, verify=False).text
     startIndx = 0
     freeMachines = 0
     freeWashers = 0
@@ -81,11 +79,21 @@ def laundryScraper() :
     minu = str(datetime.today().minute)
     if len(str(datetime.today().minute)) == 1 :
         minu = "0" + minu
-    #inserts into the spreadsheet [timestamp, day of week, hour/minutes, machines availible] 
-    sh.insert_row([datetime.today().timestamp(), weekdays[datetime.today().weekday()], str(datetime.today().hour) + ":" + minu, freeWashers, freeDryers, freeMachines], 2)
-    
+    # Add to database
+    # SQL command to insert the data in the table # #dayOfWeek
+    sql_command = "INSERT INTO data (timestamp, dayOfWeek, hours, minutes, freeWashers, freeDryers, freeMachines) VALUES ( " + str(datetime.today().timestamp()) + ", \"" + str(datetime.today().strftime("%A")) + "\", " + str(datetime.today().hour) + ", " + str(minu) + ", "+ str(freeWashers) + ", " + str(freeDryers) + ", " + str(freeMachines) +  "); "
+    cursor.execute(sql_command)
+    sqliteConnection.commit()
 
-schedule.every(checkFrequency).seconds.do(laundryScraper)
-while True:
+    #timestamp, dayOfWeek, hours, minutes, freeWashers, freeDryers, freeMachines
+
+schedule.every(checkFrequency).minutes.do(laundryScraper) #TODO: Change to minutes
+
+#while True:
+for i in range(60):
     schedule.run_pending()
     time.sleep(1)
+
+# close the connection
+sqliteConnection.close()
+
